@@ -1,5 +1,8 @@
+#include <stdint.h>
 #include <string.h>
 #include "glad.hpp"
+#include <cmath>
+#include <cstdlib>
 
 #define GLAD_USE_SDL
 
