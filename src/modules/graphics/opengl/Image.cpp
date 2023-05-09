@@ -145,12 +145,16 @@ void Image::uploadCompressedMipmaps()
 	if (!isCompressed() || !cdata.get() || !hasCompressedTextureSupport(cdata->getFormat()))
 		return;
 
+	// NPOT textures don't support mipmapping without full NPOT support.
+	if (hasLimitedNpot() && (width != next_p2(width) || height != next_p2(height)))
+		return;
+
 	bind();
 
 	int count = cdata->getMipmapCount();
 
 	// We have to inform OpenGL if the image doesn't have all mipmap levels.
-	if (GLEE_VERSION_1_2 || GLEE_SGIS_texture_lod)
+	if (GLAD_VERSION_1_2 || GLAD_ES_VERSION_3_0 || GLAD_APPLE_texture_max_level)
 	{
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, count - 1);
 	}
@@ -166,14 +170,14 @@ void Image::uploadCompressedMipmaps()
 	for (int i = 1; i < count; i++)
 	{
 		totalsize += cdata->getSize(i);
-		glCompressedTexImage2DARB(GL_TEXTURE_2D,
-		                          i,
-		                          getCompressedFormat(cdata->getFormat()),
-		                          cdata->getWidth(i),
-		                          cdata->getHeight(i),
-		                          0,
-		                          GLsizei(cdata->getSize(i)),
-		                          cdata->getData(i));
+		glCompressedTexImage2D(GL_TEXTURE_2D,
+		                       i,
+		                       getCompressedFormat(cdata->getFormat()),
+		                       cdata->getWidth(i),
+		                       cdata->getHeight(i),
+		                       0,
+		                       GLsizei(cdata->getSize(i)),
+		                       cdata->getData(i));
 	}
 
 	size_t prevmemsize = textureMemorySize;
@@ -205,7 +209,7 @@ void Image::createMipmaps()
 	// Prevent other threads from changing the ImageData while we upload it.
 	love::thread::Lock lock(data->getMutex());
 
-	if (hasNpot() && (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_object))
+	if (hasNpot() && (GLAD_ES_VERSION_2_0 || GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_object))
 	{
 		if (gl.getVendor() == OpenGL::VENDOR_ATI_AMD)
 		{
@@ -266,6 +270,12 @@ void Image::setFilter(const Texture::Filter &f)
 		filter.min = filter.mag = FILTER_NEAREST;
 	}
 
+	if (hasLimitedNpot() && (width != next_p2(width) || height != next_p2(height)))
+	{
+		// If we only have limited NPOT support then mipmapping isn't supported.
+		filter.mipmap = FILTER_NONE;
+	}
+
 	bind();
 	gl.setTextureFilter(filter);
 
@@ -282,12 +292,24 @@ void Image::setFilter(const Texture::Filter &f)
 	}
 }
 
-void Image::setWrap(const Texture::Wrap &w)
+bool Image::setWrap(const Texture::Wrap &w)
 {
+	bool success = true;
 	wrap = w;
+
+	if (hasLimitedNpot() && (width != next_p2(width) || height != next_p2(height)))
+	{
+		if (wrap.s != WRAP_CLAMP || wrap.t != WRAP_CLAMP)
+			success = false;
+
+		// If we only have limited NPOT support then the wrap mode must be CLAMP.
+		wrap.s = wrap.t = WRAP_CLAMP;
+	}
 
 	bind();
 	gl.setTextureWrap(w);
+
+	return success;
 }
 
 void Image::setMipmapSharpness(float sharpness)
@@ -377,8 +399,8 @@ bool Image::loadVolatile()
 	glGenTextures(1, &texture);
 	gl.bindTexture(texture);
 
-	filter.anisotropy = gl.setTextureFilter(filter);
-	gl.setTextureWrap(wrap);
+	setFilter(filter);
+	setWrap(wrap);
 	setMipmapSharpness(mipmapSharpness);
 
 	paddedWidth = width;
@@ -438,14 +460,19 @@ void Image::uploadTexturePadded()
 	}
 	else if (data.get())
 	{
-		GLenum iformat = (format == FORMAT_SRGB) ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+		GLenum xformat = GL_RGBA;
+		GLenum iformat = (format == FORMAT_SRGB) ? GL_SRGB_ALPHA : GL_RGBA;
+
+		if (GLAD_ES_VERSION_2_0 && !GLAD_ES_VERSION_3_0)
+			xformat = iformat;
+
 		glTexImage2D(GL_TEXTURE_2D,
 		             0,
 		             iformat,
 		             (GLsizei)paddedWidth,
 		             (GLsizei)paddedHeight,
 		             0,
-		             GL_RGBA,
+		             xformat,
 		             GL_UNSIGNED_BYTE,
 		             0);
 
@@ -454,7 +481,7 @@ void Image::uploadTexturePadded()
 		                0, 0,
 		                (GLsizei)width,
 		                (GLsizei)height,
-		                GL_RGBA,
+		                xformat,
 		                GL_UNSIGNED_BYTE,
 		                data->getData());
 	}
@@ -465,25 +492,31 @@ void Image::uploadTexture()
 	if (isCompressed() && cdata.get())
 	{
 		GLenum format = getCompressedFormat(cdata->getFormat());
-		glCompressedTexImage2DARB(GL_TEXTURE_2D,
-		                          0,
-		                          format,
-		                          cdata->getWidth(0),
-		                          cdata->getHeight(0),
-		                          0,
-		                          GLsizei(cdata->getSize(0)),
-		                          cdata->getData(0));
+		glCompressedTexImage2D(GL_TEXTURE_2D,
+		                       0,
+		                       format,
+		                       cdata->getWidth(0),
+		                       cdata->getHeight(0),
+		                       0,
+		                       GLsizei(cdata->getSize(0)),
+		                       cdata->getData(0));
 	}
 	else if (data.get())
 	{
-		GLenum iformat = (format == FORMAT_SRGB) ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+		GLenum xformat = GL_RGBA;
+		GLenum iformat = (format == FORMAT_SRGB) ? GL_SRGB_ALPHA : GL_RGBA;
+
+		// The internal and external format parameters must match in OpenGL ES 2.
+		if (GLAD_ES_VERSION_2_0 && !GLAD_ES_VERSION_3_0)
+			xformat = iformat;
+
 		glTexImage2D(GL_TEXTURE_2D,
 		             0,
 		             iformat,
 		             (GLsizei)width,
 		             (GLsizei)height,
 		             0,
-		             GL_RGBA,
+		             xformat,
 		             GL_UNSIGNED_BYTE,
 		             data->getData());
 	}
@@ -556,7 +589,7 @@ void Image::uploadDefaultTexture()
 	GLubyte px[] = {0xFF,0xFF,0xFF,0xFF, 0xC0,0xC0,0xC0,0xFF,
 	                0xC0,0xC0,0xC0,0xFF, 0xFF,0xFF,0xFF,0xFF};
 
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
 }
 
 void Image::drawv(const Matrix &t, const Vertex *v)
@@ -566,17 +599,18 @@ void Image::drawv(const Matrix &t, const Vertex *v)
 
 	predraw();
 
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-	glVertexPointer(2, GL_FLOAT, sizeof(Vertex), (GLvoid *)&v[0].x);
-	glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), (GLvoid *)&v[0].s);
-
 	gl.prepareDraw();
-	gl.drawArrays(GL_QUADS, 0, 4);
 
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-	glDisableClientState(GL_VERTEX_ARRAY);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
+
+	gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, sizeof(Vertex), (GLvoid *)&v[0].x);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_TEXCOORD, 2, GL_FLOAT, sizeof(Vertex), (GLvoid *)&v[0].s);
+
+	gl.drawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 
 	postdraw();
 }
@@ -646,60 +680,76 @@ GLenum Image::getCompressedFormat(image::CompressedData::Format cformat) const
 			return GL_COMPRESSED_RGBA_BPTC_UNORM_ARB;
 	case image::CompressedData::FORMAT_BC7SRGB:
 		return GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM_ARB;
+	case image::CompressedData::FORMAT_ETC1:
+		// The ETC2 format can load ETC1 textures.
+		if (GLAD_VERSION_4_3 || GLAD_ES_VERSION_3_0 || GLAD_ARB_ES3_compatibility)
+			return GL_COMPRESSED_RGB8_ETC2;
+		else
+			return GL_ETC1_RGB8_OES;
+	case image::CompressedData::FORMAT_PVR1_RGB2:
+		return GL_COMPRESSED_RGB_PVRTC_2BPPV1_IMG;
+	case image::CompressedData::FORMAT_PVR1_RGB4:
+		return GL_COMPRESSED_RGB_PVRTC_4BPPV1_IMG;
+	case image::CompressedData::FORMAT_PVR1_RGBA2:
+		return GL_COMPRESSED_RGBA_PVRTC_2BPPV1_IMG;
+	case image::CompressedData::FORMAT_PVR1_RGBA4:
+		return GL_COMPRESSED_RGBA_PVRTC_4BPPV1_IMG;
 	default:
 		if (srgb)
-			return GL_SRGB8_ALPHA8;
+			return GL_SRGB_ALPHA;
 		else
-			return GL_RGBA8;
+			return GL_RGBA;
 	}
 }
 
 bool Image::hasNpot()
 {
-	return GLEE_VERSION_2_0 || GLEE_ARB_texture_non_power_of_two;
+	return GLAD_ES_VERSION_2_0 || GLAD_VERSION_2_0 || GLAD_ARB_texture_non_power_of_two;
 }
 
 bool Image::hasAnisotropicFilteringSupport()
 {
-	return GLEE_EXT_texture_filter_anisotropic;
+	return GLAD_EXT_texture_filter_anisotropic;
 }
 
 bool Image::hasMipmapSupport()
 {
-	return GLEE_VERSION_1_4 || GLEE_SGIS_generate_mipmap;
+	return GLAD_ES_VERSION_2_0 || GLAD_VERSION_1_4 || GLAD_SGIS_generate_mipmap;
 }
 
 bool Image::hasMipmapSharpnessSupport()
 {
-	return GLEE_VERSION_1_4;
-}
-
-bool Image::hasCompressedTextureSupport()
-{
-	return GLEE_VERSION_1_3 || GLEE_ARB_texture_compression;
+	return GLAD_VERSION_1_4;
 }
 
 bool Image::hasCompressedTextureSupport(image::CompressedData::Format format)
 {
-	if (!hasCompressedTextureSupport())
-		return false;
-
 	switch (format)
 	{
 	case image::CompressedData::FORMAT_DXT1:
+		return GLAD_EXT_texture_compression_s3tc || GLAD_EXT_texture_compression_dxt1;
 	case image::CompressedData::FORMAT_DXT3:
+		return GLAD_EXT_texture_compression_s3tc || GLAD_ANGLE_texture_compression_dxt3;
 	case image::CompressedData::FORMAT_DXT5:
-		return GLEE_EXT_texture_compression_s3tc;
+		return GLAD_EXT_texture_compression_s3tc || GLAD_ANGLE_texture_compression_dxt5;
 	case image::CompressedData::FORMAT_BC4:
 	case image::CompressedData::FORMAT_BC4s:
 	case image::CompressedData::FORMAT_BC5:
 	case image::CompressedData::FORMAT_BC5s:
-		return (GLEE_VERSION_3_0 || GLEE_ARB_texture_compression_rgtc || GLEE_EXT_texture_compression_rgtc);
+		return (GLAD_VERSION_3_0 || GLAD_ARB_texture_compression_rgtc || GLAD_EXT_texture_compression_rgtc);
 	case image::CompressedData::FORMAT_BC6H:
 	case image::CompressedData::FORMAT_BC6Hs:
 	case image::CompressedData::FORMAT_BC7:
 	case image::CompressedData::FORMAT_BC7SRGB:
-		return GLEE_VERSION_4_2 || GLEE_ARB_texture_compression_bptc;
+		return GLAD_VERSION_4_2 || GLAD_ARB_texture_compression_bptc;
+	case image::CompressedData::FORMAT_ETC1:
+		// ETC2 support guarantees ETC1 support as well.
+		return GLAD_VERSION_4_3 || GLAD_ES_VERSION_3_0 || GLAD_ARB_ES3_compatibility || GLAD_OES_compressed_ETC1_RGB8_texture;
+	case image::CompressedData::FORMAT_PVR1_RGB2:
+	case image::CompressedData::FORMAT_PVR1_RGB4:
+	case image::CompressedData::FORMAT_PVR1_RGBA2:
+	case image::CompressedData::FORMAT_PVR1_RGBA4:
+		return GLAD_IMG_texture_compression_pvrtc;
 	default:
 		return false;
 	}
@@ -707,7 +757,7 @@ bool Image::hasCompressedTextureSupport(image::CompressedData::Format format)
 
 bool Image::hasSRGBSupport()
 {
-	return GLEE_VERSION_2_1 || GLEE_EXT_texture_sRGB;
+	return GLAD_VERSION_2_1 || GLAD_EXT_texture_sRGB || GLAD_EXT_sRGB;
 }
 
 bool Image::getConstant(const char *in, Format &out)

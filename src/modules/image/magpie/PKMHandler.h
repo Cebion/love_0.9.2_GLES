@@ -18,16 +18,11 @@
  * 3. This notice may not be removed or altered from any source distribution.
  **/
 
-#ifndef LOVE_IMAGE_MAGPIE_COMPRESSED_DATA_H
-#define LOVE_IMAGE_MAGPIE_COMPRESSED_DATA_H
+#ifndef LOVE_IMAGE_MAGPIE_PKM_HANDLER_H
+#define LOVE_IMAGE_MAGPIE_PKM_HANDLER_H
 
-// LOVE
+#include "common/config.h"
 #include "CompressedFormatHandler.h"
-#include "filesystem/FileData.h"
-#include "image/CompressedData.h"
-
-// C++
-#include <list>
 
 namespace love
 {
@@ -36,24 +31,23 @@ namespace image
 namespace magpie
 {
 
-class CompressedData : public love::image::CompressedData
+/**
+ * Handles PKM files with compressed ETC data inside.
+ **/
+class PKMHandler : public CompressedFormatHandler
 {
 public:
 
-	CompressedData(std::list<CompressedFormatHandler *> formats, love::filesystem::FileData *filedata);
-	virtual ~CompressedData();
+	virtual ~PKMHandler() {}
 
-private:
+	// Implements CompressedFormatHandler.
+	virtual bool canParse(const filesystem::FileData *data);
+	virtual uint8 *parse(filesystem::FileData *filedata, std::vector<CompressedData::SubImage> &images, size_t &dataSize, CompressedData::Format &format);
 
-	void load(love::filesystem::FileData *filedata);
-
-	// Compressed image format handlers we use for parsing.
-	std::list<CompressedFormatHandler *> formatHandlers;
-
-}; // CompressedData
+}; // PKMHandler
 
 } // magpie
 } // image
 } // love
 
-#endif // LOVE_IMAGE_MAGPIE_COMPRESSED_DATA_H
+#endif // LOVE_IMAGE_MAGPIE_PKM_HANDLER_H

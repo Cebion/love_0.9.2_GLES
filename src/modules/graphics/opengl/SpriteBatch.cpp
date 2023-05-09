@@ -252,25 +252,25 @@ void SpriteBatch::draw(float x, float y, float angle, float sx, float sy, float 
 	// Apply per-sprite color, if a color is set.
 	if (color)
 	{
-		glEnableClientState(GL_COLOR_ARRAY);
-		glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(Vertex), array_buf->getPointer(color_offset));
+		gl.enableVertexAttribArray(OpenGL::ATTRIB_COLOR);
+		gl.setVertexAttribArray(OpenGL::ATTRIB_COLOR, 4, GL_UNSIGNED_BYTE, sizeof(Vertex), array_buf->getPointer(color_offset));
 	}
 
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glVertexPointer(2, GL_FLOAT, sizeof(Vertex), array_buf->getPointer(pos_offset));
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, sizeof(Vertex), array_buf->getPointer(pos_offset));
 
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-	glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), array_buf->getPointer(texel_offset));
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_TEXCOORD, 2, GL_FLOAT, sizeof(Vertex), array_buf->getPointer(texel_offset));
 
 	gl.prepareDraw();
 	gl.drawElements(GL_TRIANGLES, element_buf.getIndexCount(next), element_buf.getType(), element_buf.getPointer(0));
 
-	glDisableClientState(GL_VERTEX_ARRAY);
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 
 	if (color)
 	{
-		glDisableClientState(GL_COLOR_ARRAY);
+		gl.disableVertexAttribArray(OpenGL::ATTRIB_COLOR);
 		gl.setColor(curcolor);
 	}
 

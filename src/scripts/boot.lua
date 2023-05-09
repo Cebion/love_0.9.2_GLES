@@ -458,22 +458,8 @@ function love.init()
 
 			print(msg)
 
-			local can_display = love.window and love.window.isCreated()
-			can_display = can_display and love.graphics and love.graphics.isCreated()
-
-			if can_display and love.timer and love.event then
-				love.graphics.setBackgroundColor(89, 157, 220)
-				love.graphics.origin()
-
-				local start = love.timer.getTime()
-				while love.timer.getTime() < start + 4 do
-					love.event.pump()
-					love.graphics.clear()
-					love.graphics.print(msg, 70, 70)
-					love.graphics.present()
-					love.timer.sleep(1/20)
-				end
-				love.graphics.setBackgroundColor(0, 0, 0)
+			if love.window then
+				love.window.showMessageBox("Compatibility Warning", msg, "warning")
 			end
 		end
 	end
@@ -518,7 +504,7 @@ function love.run()
 		-- Call update and draw
 		if love.update then love.update(dt) end -- will pass 0 if love.timer is disabled
 
-		if love.window and love.graphics and love.window.isCreated() then
+		if love.window and love.graphics and love.graphics.isActive() then
 			love.graphics.clear()
 			love.graphics.origin()
 			if love.draw then love.draw() end

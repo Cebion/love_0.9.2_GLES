@@ -31,6 +31,7 @@
 #include "font/Rasterizer.h"
 #include "graphics/Texture.h"
 #include "graphics/Volatile.h"
+#include "VertexBuffer.h"
 
 #include "OpenGL.h"
 
@@ -186,6 +187,8 @@ private:
 	Glyph *findGlyph(uint32 glyph);
 
 	StrongRef<love::font::Rasterizer> rasterizer;
+
+	VertexIndex *indexBuffer;
 
 	int height;
 	float lineHeight;

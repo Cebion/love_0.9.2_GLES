@@ -28,6 +28,9 @@
 #include <vector>
 #include <algorithm>
 
+// C
+#include <cstring>
+
 namespace love
 {
 namespace window
@@ -209,7 +212,7 @@ bool Window::setWindow(int width, int height, WindowSettings *settings)
 
 	if (!window)
 	{
-		std::cerr << "Could not set video mode: " << SDL_GetError() << std::endl;
+		showMessageBox("Could not create window", SDL_GetError(), MESSAGEBOX_ERROR, false);
 		return false;
 	}
 
@@ -222,7 +225,10 @@ bool Window::setWindow(int width, int height, WindowSettings *settings)
 	SDL_RaiseWindow(window);
 
 	if (!setContext(f.msaa, f.vsync, f.sRGB))
+	{
+		created = false;
 		return false;
+	}
 
 	created = true;
 
@@ -238,7 +244,8 @@ bool Window::setWindow(int width, int height, WindowSettings *settings)
 		SDL_GL_GetDrawableSize(window, &width, &height);
 #endif
 
-		gfx->setMode(width, height, curMode.settings.sRGB);
+		if (!gfx->setMode(width, height, curMode.settings.sRGB))
+			showMessageBox("Could not set graphics mode", "Unsupported OpenGL version?", MESSAGEBOX_ERROR, true);
 	}
 
 	// Make sure the mouse keeps its previous grab setting.
@@ -285,18 +292,21 @@ bool Window::setContext(int msaa, bool vsync, bool sRGB)
 	if (!context)
 	{
 		int flags = 0;
+		int profilemask = 0;
 		SDL_GL_GetAttribute(SDL_GL_CONTEXT_FLAGS, &flags);
+		SDL_GL_GetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, &profilemask);
 		if (flags & SDL_GL_CONTEXT_DEBUG_FLAG)
 		{
+			profilemask &= ~SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
 			SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-			SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, 0);
+			SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, profilemask);
 			context = SDL_GL_CreateContext(window);
 		}
 	}
 
 	if (!context)
 	{
-		std::cerr << "Could not set video mode: " << SDL_GetError() << std::endl;
+		showMessageBox("Could not create OpenGL context", SDL_GetError(), MESSAGEBOX_ERROR, true);
 		return false;
 	}
 
@@ -341,23 +351,59 @@ void Window::setWindowGLAttributes(int msaa, bool /* sRGB */) const
 	 * context with this disabled, if creation fails with it enabled.
 	 * We can leave this out for now because in practice the framebuffer will
 	 * already be sRGB-capable (on desktops at least.)
-#if SDL_VERSION_ATLEAST(2,0,1)
-	SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, sRGB ? 1 : 0);
-#endif
+	 #if SDL_VERSION_ATLEAST(2,0,1)
+	 SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, sRGB ? 1 : 0);
+	 #endif
 	 */
+
+	int contextprofile = 0;
+
+	bool tryGLES = false;
+
+	const char *driver = SDL_GetCurrentVideoDriver();
+	const char *glesdrivers[] = {"RPI", "Android", "uikit", "winrt"};
+
+	// We always want to use OpenGL ES on certain video backends.
+	for (size_t i = 0; i < sizeof(glesdrivers) / sizeof(glesdrivers[0]); i++)
+	{
+		if (driver && strstr(driver, glesdrivers[i]))
+		{
+			tryGLES = true;
+			break;
+		}
+	}
+
+	const char *hint = SDL_GetHint("LOVE_GRAPHICS_USE_OPENGLES");
+	if (hint)
+		tryGLES = (*hint) != '0';
+
+	if (tryGLES)
+	{
+		// Use OpenGL ES 2+.
+		contextprofile = SDL_GL_CONTEXT_PROFILE_ES;
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+	}
+	else
+	{
+		// Use desktop OpenGL.
+		contextprofile = 0;
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2); // default
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+	}
 
 	// Do we want a debug context?
 	const char *debugenv = SDL_GetHint("LOVE_GRAPHICS_DEBUG");
 	if (debugenv && *debugenv == '1')
 	{
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_DEBUG_FLAG);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+		if (!tryGLES)
+			contextprofile |= SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
 	}
 	else
-	{
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, 0);
-	}
+
+	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, contextprofile);
 }
 
 void Window::updateSettings(const WindowSettings &newsettings)

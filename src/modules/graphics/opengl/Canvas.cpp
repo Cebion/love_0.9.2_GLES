@@ -96,7 +96,7 @@ struct FramebufferStrategy
 	virtual void setAttachments() {}
 };
 
-struct FramebufferStrategyGL3 : public FramebufferStrategy
+struct FramebufferStrategyCore : public FramebufferStrategy
 {
 	virtual GLenum createFBO(GLuint &framebuffer, GLuint texture)
 	{
@@ -124,18 +124,18 @@ struct FramebufferStrategyGL3 : public FramebufferStrategy
 
 	virtual bool createStencil(int width, int height, int samples, GLuint &stencil)
 	{
-		// create combined depth/stencil buffer
+		// create stencil buffer
 		glDeleteRenderbuffers(1, &stencil);
 		glGenRenderbuffers(1, &stencil);
 		glBindRenderbuffer(GL_RENDERBUFFER, stencil);
 
 		if (samples > 1)
-			glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_STENCIL, width, height);
+			glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_STENCIL_INDEX8, width, height);
 		else
-			glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_STENCIL, width, height);
+			glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, width, height);
 
-		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-		                          GL_RENDERBUFFER, stencil);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+								  GL_RENDERBUFFER, stencil);
 
 		glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
@@ -214,10 +214,34 @@ struct FramebufferStrategyGL3 : public FramebufferStrategy
 		}
 
 		// set up multiple render targets
-		if (GLEE_VERSION_2_0)
+		if (GLAD_VERSION_2_0 || GLAD_ES_VERSION_3_0)
 			glDrawBuffers(drawbuffers.size(), &drawbuffers[0]);
-		else if (GLEE_ARB_draw_buffers)
+		else if (GLAD_ARB_draw_buffers)
 			glDrawBuffersARB(drawbuffers.size(), &drawbuffers[0]);
+	}
+};
+
+struct FramebufferStrategyCorePacked : public FramebufferStrategyCore
+{
+	virtual bool createStencil(int width, int height, int samples, GLuint &stencil)
+	{
+		// create combined depth/stencil buffer
+		glDeleteRenderbuffers(1, &stencil);
+		glGenRenderbuffers(1, &stencil);
+		glBindRenderbuffer(GL_RENDERBUFFER, stencil);
+
+		if (samples > 1)
+			glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH_STENCIL, width, height);
+		else
+			glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_STENCIL, width, height);
+
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+								  GL_RENDERBUFFER, stencil);
+
+		glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+		// check status
+		return glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 	}
 };
 
@@ -279,7 +303,7 @@ struct FramebufferStrategyPackedEXT : public FramebufferStrategy
 
 	virtual bool createMSAABuffer(int width, int height, int &samples, GLenum internalformat, GLuint &buffer)
 	{
-		if (!GLEE_EXT_framebuffer_multisample)
+		if (!GLAD_EXT_framebuffer_multisample)
 			return false;
 
 		glGenRenderbuffersEXT(1, &buffer);
@@ -344,9 +368,9 @@ struct FramebufferStrategyPackedEXT : public FramebufferStrategy
 		}
 
 		// set up multiple render targets
-		if (GLEE_VERSION_2_0)
+		if (GLAD_VERSION_2_0 || GLAD_ES_VERSION_3_0)
 			glDrawBuffers(drawbuffers.size(), &drawbuffers[0]);
-		else if (GLEE_ARB_draw_buffers)
+		else if (GLAD_ARB_draw_buffers)
 			glDrawBuffersARB(drawbuffers.size(), &drawbuffers[0]);
 	}
 };
@@ -400,7 +424,9 @@ FramebufferStrategy *strategy = nullptr;
 
 FramebufferStrategy strategyNone;
 
-FramebufferStrategyGL3 strategyGL3;
+FramebufferStrategyCore strategyCore;
+
+FramebufferStrategyCorePacked strategyCorePacked;
 
 FramebufferStrategyPackedEXT strategyPackedEXT;
 
@@ -416,11 +442,13 @@ static void getStrategy()
 {
 	if (!strategy)
 	{
-		if (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_object)
-			strategy = &strategyGL3;
-		else if (GLEE_EXT_framebuffer_object && GLEE_EXT_packed_depth_stencil)
+		if (GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_object)
+			strategy = &strategyCorePacked;
+		else if (GLAD_ES_VERSION_2_0)
+			strategy = &strategyCore;
+		else if (GLAD_EXT_framebuffer_object && GLAD_EXT_packed_depth_stencil)
 			strategy = &strategyPackedEXT;
-		else if (GLEE_EXT_framebuffer_object && strategyEXT.isSupported())
+		else if (GLAD_EXT_framebuffer_object && strategyEXT.isSupported())
 			strategy = &strategyEXT;
 		else
 			strategy = &strategyNone;
@@ -537,6 +565,9 @@ bool Canvas::loadVolatile()
 	glGenTextures(1, &texture);
 	gl.bindTexture(texture);
 
+	if (GLAD_ANGLE_texture_usage)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_USAGE_ANGLE, GL_FRAMEBUFFER_ATTACHMENT_ANGLE);
+
 	setFilter(filter);
 	setWrap(wrap);
 
@@ -545,6 +576,10 @@ bool Canvas::loadVolatile()
 	GLenum textype = GL_UNSIGNED_BYTE;
 
 	convertFormat(format, internalformat, externalformat, textype);
+
+	// in ES2, the internalformat and format params of TexImage have to match.
+	if (GLAD_ES_VERSION_2_0 && !GLAD_ES_VERSION_3_0)
+		internalformat = externalformat;
 
 	while (glGetError() != GL_NO_ERROR)
 		/* Clear the error buffer. */;
@@ -567,8 +602,8 @@ bool Canvas::loadVolatile()
 	}
 
 	int max_samples = 0;
-	if (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_object
-		|| GLEE_EXT_framebuffer_multisample)
+	if (GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_object
+		|| GLAD_EXT_framebuffer_multisample)
 	{
 		glGetIntegerv(GL_MAX_SAMPLES, &max_samples);
 	}
@@ -631,19 +666,20 @@ void Canvas::drawv(const Matrix &t, const Vertex *v)
 	OpenGL::TempTransform transform(gl);
 	transform.get() *= t;
 
+	gl.prepareDraw();
+
 	predraw();
 
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 
-	glVertexPointer(2, GL_FLOAT, sizeof(Vertex), (GLvoid *)&v[0].x);
-	glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), (GLvoid *)&v[0].s);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, sizeof(Vertex), (GLvoid *) &v[0].x);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_TEXCOORD, 2, GL_FLOAT, sizeof(Vertex), (GLvoid *) &v[0].s);
 
-	gl.prepareDraw();
-	gl.drawArrays(GL_QUADS, 0, 4);
+	gl.drawArrays(GL_TRIANGLE_FAN, 0, 4);
 
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-	glDisableClientState(GL_VERTEX_ARRAY);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 
 	postdraw();
 }
@@ -672,11 +708,24 @@ void Canvas::setFilter(const Texture::Filter &f)
 	gl.setTextureFilter(filter);
 }
 
-void Canvas::setWrap(const Texture::Wrap &w)
+bool Canvas::setWrap(const Texture::Wrap &w)
 {
+	bool success = true;
 	wrap = w;
+
+	if (hasLimitedNpot() && (width != next_p2(width) || height != next_p2(height)))
+	{
+		if (wrap.s != WRAP_CLAMP || wrap.t != WRAP_CLAMP)
+			success = false;
+
+		// If we only have limited NPOT support then the wrap mode must be CLAMP.
+		wrap.s = wrap.t = WRAP_CLAMP;
+	}
+
 	gl.bindTexture(texture);
 	gl.setTextureWrap(wrap);
+
+	return success;
 }
 
 GLuint Canvas::getGLTexture() const
@@ -719,10 +768,13 @@ void Canvas::setupGrab()
 	gl.matrices.projection.push_back(Matrix::ortho(0.0, width, 0.0, height));
 
 	// Make sure the correct sRGB setting is used when drawing to the canvas.
-	if (format == FORMAT_SRGB)
-		glEnable(GL_FRAMEBUFFER_SRGB);
-	else if (screenHasSRGB)
-		glDisable(GL_FRAMEBUFFER_SRGB);
+	if (GLAD_VERSION_1_1 || GLAD_EXT_sRGB_write_control)
+	{
+		if (format == FORMAT_SRGB)
+			glEnable(GL_FRAMEBUFFER_SRGB);
+		else if (screenHasSRGB)
+			glDisable(GL_FRAMEBUFFER_SRGB);
+	}
 
 	if (msaa_buffer != 0)
 		msaa_dirty = true;
@@ -795,24 +847,37 @@ void Canvas::stopGrab(bool switchingToOtherCanvas)
 	if (current != this)
 		return;
 
+	if (depth_stencil != 0 && GLAD_EXT_discard_framebuffer)
+	{
+		// Hint for the driver that it doesn't need to save these buffers.
+		GLenum attachments[] = {GL_STENCIL_ATTACHMENT, GL_DEPTH_ATTACHMENT};
+		glDiscardFramebufferEXT(GL_FRAMEBUFFER, 2, attachments);
+	}
+
 	gl.matrices.projection.pop_back();
 
 	if (switchingToOtherCanvas)
 	{
-		if (format == FORMAT_SRGB)
-			glDisable(GL_FRAMEBUFFER_SRGB);
+		if (GLAD_VERSION_1_1 || GLAD_EXT_sRGB_write_control)
+		{
+			if (format == FORMAT_SRGB)
+				glDisable(GL_FRAMEBUFFER_SRGB);
+		}
 	}
 	else
 	{
-		// bind system framebuffer.
-		strategy->bindFBO(0);
+		// bind the default framebuffer.
+		strategy->bindFBO(gl.getDefaultFBO());
 		current = nullptr;
 		gl.setViewport(systemViewport);
 
-		if (format == FORMAT_SRGB && !screenHasSRGB)
-			glDisable(GL_FRAMEBUFFER_SRGB);
-		else if (format != FORMAT_SRGB && screenHasSRGB)
-			glEnable(GL_FRAMEBUFFER_SRGB);
+		if (GLAD_VERSION_1_1 || GLAD_EXT_sRGB_write_control)
+		{
+			if (format == FORMAT_SRGB && !screenHasSRGB)
+				glDisable(GL_FRAMEBUFFER_SRGB);
+			else if (format != FORMAT_SRGB && screenHasSRGB)
+				glEnable(GL_FRAMEBUFFER_SRGB);
+		}
 	}
 }
 
@@ -821,7 +886,7 @@ void Canvas::clear(Color c)
 	if (strategy == &strategyNone)
 		return;
 
-	GLuint previous = 0;
+	GLuint previous = gl.getDefaultFBO();
 
 	if (current != this)
 	{
@@ -835,7 +900,7 @@ void Canvas::clear(Color c)
 
 	// We don't need to worry about multiple FBO attachments or global clear
 	// color state when OpenGL 3.0+ is supported.
-	if (GLEE_VERSION_3_0)
+	if (GLAD_VERSION_3_0 || GLAD_ES_VERSION_3_0)
 	{
 		glClearBufferfv(GL_COLOR, 0, glcolor);
 
@@ -885,7 +950,7 @@ bool Canvas::checkCreateStencil()
 	if (current && current != this)
 		strategy->bindFBO(current->fbo);
 	else if (!current)
-		strategy->bindFBO(0);
+		strategy->bindFBO(gl.getDefaultFBO());
 
 	return success;
 }
@@ -899,9 +964,9 @@ love::image::ImageData *Canvas::getImageData(love::image::Image *image)
 	GLubyte *pixels  = new GLubyte[size];
 
 	// Our texture is attached to 'resolve_fbo' when we use MSAA.
-	if (msaa_samples > 1 && (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_object))
+	if (msaa_samples > 1 && (GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_object))
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, resolve_fbo);
-	else if (msaa_samples > 1 && GLEE_EXT_framebuffer_multisample)
+	else if (msaa_samples > 1 && GLAD_EXT_framebuffer_multisample)
 		glBindFramebufferEXT(GL_READ_FRAMEBUFFER, resolve_fbo);
 	else
 		strategy->bindFBO(fbo);
@@ -911,7 +976,7 @@ love::image::ImageData *Canvas::getImageData(love::image::Image *image)
 	if (current)
 		strategy->bindFBO(current->fbo);
 	else
-		strategy->bindFBO(0);
+		strategy->bindFBO(gl.getDefaultFBO());
 
 	// The new ImageData now owns the pixel data, so we don't delete it here.
 	love::image::ImageData *img = image->newImageData(width, height, (void *)pixels, true);
@@ -926,9 +991,9 @@ void Canvas::getPixel(unsigned char* pixel_rgba, int x, int y)
 	resolveMSAA();
 
 	// Our texture is attached to 'resolve_fbo' when we use MSAA.
-	if (msaa_samples > 1 && (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_object))
+	if (msaa_samples > 1 && (GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_object))
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, resolve_fbo);
-	else if (msaa_samples > 1 && GLEE_EXT_framebuffer_multisample)
+	else if (msaa_samples > 1 && GLAD_EXT_framebuffer_multisample)
 		glBindFramebufferEXT(GL_READ_FRAMEBUFFER, resolve_fbo);
 	else if (current != this)
 		strategy->bindFBO(fbo);
@@ -938,7 +1003,7 @@ void Canvas::getPixel(unsigned char* pixel_rgba, int x, int y)
 	if (current && current != this)
 		strategy->bindFBO(current->fbo);
 	else if (!current)
-		strategy->bindFBO(0);
+		strategy->bindFBO(gl.getDefaultFBO());
 }
 
 bool Canvas::resolveMSAA()
@@ -954,14 +1019,14 @@ bool Canvas::resolveMSAA()
 		previous = current->fbo;
 
 	// Do the MSAA resolve by blitting the MSAA renderbuffer to the texture.
-	if (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_object)
+	if (GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_object)
 	{
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolve_fbo);
 		glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
 						  GL_COLOR_BUFFER_BIT, GL_NEAREST);
 	}
-	else if (GLEE_EXT_framebuffer_multisample && GLEE_EXT_framebuffer_blit)
+	else if (GLAD_EXT_framebuffer_multisample && GLAD_EXT_framebuffer_blit)
 	{
 		glBindFramebufferEXT(GL_READ_FRAMEBUFFER, fbo);
 		glBindFramebufferEXT(GL_DRAW_FRAMEBUFFER, resolve_fbo);
@@ -984,7 +1049,11 @@ Canvas::Format Canvas::getSizedFormat(Canvas::Format format)
 	switch (format)
 	{
 	case FORMAT_NORMAL:
-		return FORMAT_RGBA8;
+		// 32-bit render targets don't have guaranteed support on OpenGL ES 2.
+		if (GLAD_ES_VERSION_2_0 && !(GLAD_ES_VERSION_3_0 || GLAD_OES_rgb8_rgba8 || GLAD_ARM_rgba8))
+			return FORMAT_RGBA4;
+		else
+			return FORMAT_RGBA8;
 	case FORMAT_HDR:
 		return FORMAT_RGBA16F;
 	default:
@@ -1019,7 +1088,7 @@ void Canvas::convertFormat(Canvas::Format format, GLenum &internalformat, GLenum
 		break;
 	case FORMAT_RGB10A2:
 		internalformat = GL_RGB10_A2;
-		type = GL_UNSIGNED_INT_10_10_10_2;
+		type = GL_UNSIGNED_INT_2_10_10_10_REV;
 		break;
 	case FORMAT_RG11B10F:
 		internalformat = GL_R11F_G11F_B10F;
@@ -1028,7 +1097,12 @@ void Canvas::convertFormat(Canvas::Format format, GLenum &internalformat, GLenum
 		break;
 	case FORMAT_RGBA16F:
 		internalformat = GL_RGBA16F;
-		type = GL_FLOAT;
+		if (GLAD_OES_texture_float)
+			type = GL_HALF_FLOAT_OES;
+		else if (GLAD_VERSION_1_1)
+			type = GL_FLOAT;
+		else
+			type = GL_HALF_FLOAT;
 		break;
 	case FORMAT_RGBA32F:
 		internalformat = GL_RGBA32F;
@@ -1037,6 +1111,8 @@ void Canvas::convertFormat(Canvas::Format format, GLenum &internalformat, GLenum
 	case FORMAT_SRGB:
 		internalformat = GL_SRGB8_ALPHA8;
 		type = GL_UNSIGNED_BYTE;
+		if (GLAD_ES_VERSION_2_0)
+			externalformat = GL_SRGB_ALPHA;
 		break;
 	}
 }
@@ -1088,24 +1164,48 @@ bool Canvas::isFormatSupported(Canvas::Format format)
 	switch (format)
 	{
 	case FORMAT_RGBA8:
+		if (GLAD_VERSION_1_1)
+			supported = true;
+		else
+			supported = GLAD_ES_VERSION_3_0 || GLAD_OES_rgb8_rgba8 || GLAD_ARM_rgba8;
+		break;
 	case FORMAT_RGBA4:
 	case FORMAT_RGB5A1:
-	case FORMAT_RGB10A2:
 		supported = true;
 		break;
 	case FORMAT_RGB565:
-		supported = GLEE_VERSION_4_2 || GLEE_ARB_ES2_compatibility;
+		supported = GLAD_ES_VERSION_2_0 || GLAD_VERSION_4_2 || GLAD_ARB_ES2_compatibility;
+		break;
+	case FORMAT_RGB10A2:
+		if (GLAD_VERSION_1_1)
+			supported = true;
+		else
+			supported = GLAD_ES_VERSION_3_0;
 		break;
 	case FORMAT_RG11B10F:
-		supported = GLEE_VERSION_3_0 || GLEE_EXT_packed_float;
+		if (GLAD_VERSION_1_1)
+			supported = GLAD_VERSION_3_0 || GLAD_EXT_packed_float;
+		else
+			supported = GLAD_ES_VERSION_3_0 /*|| GLAD_NV_packed_float*/;
 		break;
 	case FORMAT_RGBA16F:
+		if (GLAD_VERSION_1_1)
+			supported = GLAD_VERSION_3_0 || GLAD_ARB_texture_float;
+		else
+			supported = GLAD_EXT_color_buffer_half_float && (GLAD_ES_VERSION_3_0 || GLAD_OES_texture_half_float);
+		break;
 	case FORMAT_RGBA32F:
-		supported = GLEE_VERSION_3_0 || GLEE_ARB_texture_float;
+		if (GLAD_VERSION_1_1)
+			supported = GLAD_VERSION_3_0 || GLAD_ARB_texture_float;
+		else
+			supported = false; // GLAD_EXT_color_buffer_float && GLAD_ES_VERSION_3_0;
 		break;
 	case FORMAT_SRGB:
-		supported = GLEE_VERSION_3_0 || ((GLEE_ARB_framebuffer_sRGB || GLEE_EXT_framebuffer_sRGB)
-			&& (GLEE_VERSION_2_1 || GLEE_EXT_texture_sRGB));
+		if (GLAD_VERSION_1_1)
+			supported = GLAD_VERSION_3_0 || ((GLAD_ARB_framebuffer_sRGB || GLAD_EXT_framebuffer_sRGB)
+				&& (GLAD_VERSION_2_1 || GLAD_EXT_texture_sRGB));
+		else
+			supported = GLAD_ES_VERSION_3_0 || GLAD_EXT_sRGB;
 		break;
 	default:
 		supported = false;
@@ -1127,6 +1227,9 @@ bool Canvas::isFormatSupported(Canvas::Format format)
 	GLenum externalformat = GL_RGBA;
 	GLenum textype = GL_UNSIGNED_BYTE;
 	convertFormat(format, internalformat, externalformat, textype);
+
+	if (GLAD_ES_VERSION_2_0 && !GLAD_ES_VERSION_3_0)
+		internalformat = externalformat;
 
 	GLuint texture = 0;
 	glGenTextures(1, &texture);

@@ -326,7 +326,7 @@ void Mesh::draw(float x, float y, float angle, float sx, float sy, float ox, flo
 	if (texture.get())
 		texture->predraw();
 	else
-		gl.bindTexture(0);
+		gl.bindTexture(gl.getDefaultTexture());
 
 	Matrix m;
 	m.setTransformation(x, y, angle, sx, sy, ox, oy, kx, ky);
@@ -339,17 +339,17 @@ void Mesh::draw(float x, float y, float angle, float sx, float sy, float ox, flo
 	// Make sure the VBO isn't mapped when we draw (sends data to GPU if needed.)
 	vbo->unmap();
 
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 
-	glVertexPointer(2, GL_FLOAT, sizeof(Vertex), vbo->getPointer(pos_offset));
-	glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), vbo->getPointer(tex_offset));
+	gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, sizeof(Vertex), vbo->getPointer(pos_offset));
+	gl.setVertexAttribArray(OpenGL::ATTRIB_TEXCOORD, 2, GL_FLOAT, sizeof(Vertex), vbo->getPointer(tex_offset));
 
 	if (hasVertexColors())
 	{
 		// Per-vertex colors.
-		glEnableClientState(GL_COLOR_ARRAY);
-		glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(Vertex), vbo->getPointer(color_offset));
+		gl.enableVertexAttribArray(OpenGL::ATTRIB_COLOR);
+		gl.setVertexAttribArray(OpenGL::ATTRIB_COLOR, 4, GL_UNSIGNED_BYTE, sizeof(Vertex), vbo->getPointer(color_offset));
 	}
 
 	GLenum mode = getGLDrawMode(draw_mode);
@@ -391,12 +391,12 @@ void Mesh::draw(float x, float y, float angle, float sx, float sy, float ox, flo
 		gl.drawArrays(mode, min, max - min + 1);
 	}
 
-	glDisableClientState(GL_VERTEX_ARRAY);
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 
 	if (hasVertexColors())
 	{
-		glDisableClientState(GL_COLOR_ARRAY);
+		gl.disableVertexAttribArray(OpenGL::ATTRIB_COLOR);
 		// Using the color array leaves the GL constant color undefined.
 		gl.setColor(gl.getColor());
 	}

@@ -63,6 +63,12 @@ int w_isCreated(lua_State *L)
 	return 1;
 }
 
+int w_isActive(lua_State *L)
+{
+	luax_pushboolean(L, instance()->isActive());
+	return 1;
+}
+
 int w_getWidth(lua_State *L)
 {
 	lua_pushinteger(L, instance()->getWidth());
@@ -1005,6 +1011,36 @@ int w_getShader(lua_State *L)
 	return 1;
 }
 
+int w_setDefaultShaderCode(lua_State *L)
+{
+	luaL_checktype(L, 1, LUA_TTABLE);
+
+	lua_getfield(L, 1, "opengl");
+	lua_rawgeti(L, -1, 1);
+	lua_rawgeti(L, -2, 2);
+
+	Shader::ShaderSource openglcode;
+	openglcode.vertex = luax_checkstring(L, -2);
+	openglcode.pixel = luax_checkstring(L, -1);
+
+	lua_pop(L, 3);
+
+	lua_getfield(L, 1, "opengles");
+	lua_rawgeti(L, -1, 1);
+	lua_rawgeti(L, -2, 2);
+
+	Shader::ShaderSource openglescode;
+	openglescode.vertex = luax_checkstring(L, -2);
+	openglescode.pixel = luax_checkstring(L, -1);
+
+	lua_pop(L, 3);
+
+	Shader::defaultCode[Graphics::RENDERER_OPENGL] = openglcode;
+	Shader::defaultCode[Graphics::RENDERER_OPENGLES] = openglescode;
+
+	return 0;
+}
+
 int w_isSupported(lua_State *L)
 {
 	bool supported = true;
@@ -1482,6 +1518,7 @@ static const luaL_Reg functions[] =
 
 	{ "setShader", w_setShader },
 	{ "getShader", w_getShader },
+	{ "_setDefaultShaderCode", w_setDefaultShaderCode },
 
 	{ "isSupported", w_isSupported },
 	{ "getCanvasFormats", w_getCanvasFormats },
@@ -1496,6 +1533,7 @@ static const luaL_Reg functions[] =
 	{ "printf", w_printf },
 
 	{ "isCreated", w_isCreated },
+	{ "isActive", w_isActive },
 	{ "getWidth", w_getWidth },
 	{ "getHeight", w_getHeight },
 	{ "getDimensions", w_getDimensions },

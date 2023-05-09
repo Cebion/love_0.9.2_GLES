@@ -62,6 +62,9 @@ namespace
 
 
 Shader *Shader::current = nullptr;
+Shader *Shader::defaultShader = nullptr;
+
+Shader::ShaderSource Shader::defaultCode[Graphics::RENDERER_MAX_ENUM];
 
 GLint Shader::maxTexUnits = 0;
 std::vector<int> Shader::textureCounters;
@@ -218,9 +221,9 @@ void Shader::mapActiveUniforms()
 
 bool Shader::loadVolatile()
 {
-    // Recreating the shader program will invalidate uniforms that rely on these.
-    lastCanvas = (Canvas *) -1;
-    lastViewport = OpenGL::Viewport();
+	// Creating the shader will invalidate the uniforms that rely on these.
+	lastCanvas = (Canvas *) -1;
+	lastViewport = OpenGL::Viewport();
 
 	// zero out active texture list
 	activeTexUnits.clear();
@@ -230,11 +233,18 @@ bool Shader::loadVolatile()
 
 	try
 	{
+		// All shader programs in ES2 must have a vertex and pixel shader.
+		const ShaderSource &defaultESCode = defaultCode[Graphics::RENDERER_OPENGLES];
+
 		if (!shaderSource.vertex.empty())
 			shaderids.push_back(compileCode(STAGE_VERTEX, shaderSource.vertex));
+		else if (GLAD_ES_VERSION_2_0)
+			shaderids.push_back(compileCode(STAGE_VERTEX, defaultESCode.vertex));
 
 		if (!shaderSource.pixel.empty())
 			shaderids.push_back(compileCode(STAGE_PIXEL, shaderSource.pixel));
+		else if (GLAD_ES_VERSION_2_0)
+			shaderids.push_back(compileCode(STAGE_PIXEL, defaultESCode.pixel));
 	}
 	catch (love::Exception &)
 	{
@@ -261,6 +271,10 @@ bool Shader::loadVolatile()
 	// Bind generic vertex attribute indices to names in the shader.
 	for (int i = 0; i < int(OpenGL::ATTRIB_MAX_ENUM); i++)
 	{
+		// Desktop OpenGL should ignore some of these.
+		if (!GLAD_ES_VERSION_2_0 && i <= int(OpenGL::ATTRIB_COLOR))
+			continue;
+
 		OpenGL::VertexAttrib attrib = (OpenGL::VertexAttrib) i;
 
 		// FIXME: We skip this both because pseudo-instancing is temporarily
@@ -291,7 +305,7 @@ bool Shader::loadVolatile()
 		throw love::Exception("Cannot link shader program object:\n%s", warnings.c_str());
 	}
 
-	// Retreive all active uniform variables in this shader from OpenGL.
+	// Retrieve all active uniform variables in this shader from OpenGL.
 	mapActiveUniforms();
 
 	for (int i = 0; i < int(OpenGL::ATTRIB_MAX_ENUM); i++)
@@ -308,7 +322,7 @@ bool Shader::loadVolatile()
 		// make sure glUseProgram gets called.
 		current = nullptr;
 		attach();
-        checkSetScreenParams();
+		checkSetScreenParams();
 	}
 
 	return true;
@@ -385,10 +399,12 @@ std::string Shader::getWarnings() const
 
 void Shader::attach(bool temporary)
 {
-	if (current != this)
+	Shader *oldshader = current;
+	if (oldshader != this)
 	{
 		glUseProgram(program);
 		current = this;
+
 		// retain/release happens in Graphics::setShader.
 	}
 
@@ -409,10 +425,20 @@ void Shader::attach(bool temporary)
 
 void Shader::detach()
 {
-	if (current != nullptr)
-		glUseProgram(0);
-
-	current = nullptr;
+	// We always need a shader set in ES2.
+	if (GLAD_ES_VERSION_2_0)
+	{
+		if (defaultShader && current != defaultShader)
+			defaultShader->attach();
+	}
+	else
+	{
+		if (current != nullptr)
+		{
+			glUseProgram(0);
+			current = nullptr;
+		}
+	}
 }
 
 const Shader::Uniform &Shader::getUniform(const std::string &name) const
@@ -719,6 +745,33 @@ bool Shader::sendBuiltinFloat(BuiltinUniform builtin, int size, const GLfloat *v
 	return true;
 }
 
+bool Shader::sendBuiltinMatrix(BuiltinUniform builtin, int size, const GLfloat *m, int count)
+{
+	if (!hasBuiltinUniform(builtin))
+		return false;
+
+	GLint location = builtinUniforms[GLint(builtin)];
+
+	TemporaryAttacher attacher(this);
+
+	switch (size)
+	{
+	case 2:
+		glUniformMatrix2fv(location, count, GL_FALSE, m);
+		break;
+	case 3:
+		glUniformMatrix3fv(location, count, GL_FALSE, m);
+		break;
+	case 4:
+		glUniformMatrix4fv(location, count, GL_FALSE, m);
+		break;
+	default:
+		return false;
+	}
+
+	return true;
+}
+
 void Shader::checkSetScreenParams()
 {
 	OpenGL::Viewport view = gl.getViewport();
@@ -764,7 +817,7 @@ std::string Shader::getGLSLVersion()
 	const char *tmp = nullptr;
 
 	// GL_SHADING_LANGUAGE_VERSION isn't available in OpenGL < 2.0.
-	if (GLEE_VERSION_2_0 || GLEE_ARB_shading_language_100)
+	if (GLAD_ES_VERSION_2_0 || GLAD_VERSION_2_0 || GLAD_ARB_shading_language_100)
 		tmp = (const char *) glGetString(GL_SHADING_LANGUAGE_VERSION);
 
 	if (tmp == nullptr)
@@ -782,7 +835,7 @@ std::string Shader::getGLSLVersion()
 
 bool Shader::isSupported()
 {
-	return GLEE_VERSION_2_0 && getGLSLVersion() >= "1.2";
+	return GLAD_ES_VERSION_2_0 || (GLAD_VERSION_2_0 && getGLSLVersion() >= "1.2");
 }
 
 bool Shader::getConstant(const char *in, UniformType &out)
@@ -816,6 +869,9 @@ StringMap<Shader::UniformType, Shader::UNIFORM_MAX_ENUM> Shader::uniformTypes(Sh
 
 StringMap<OpenGL::VertexAttrib, OpenGL::ATTRIB_MAX_ENUM>::Entry Shader::attribNameEntries[] =
 {
+	{"VertexPosition", OpenGL::ATTRIB_POS},
+	{"VertexTexCoord", OpenGL::ATTRIB_TEXCOORD},
+	{"VertexColor", OpenGL::ATTRIB_COLOR},
 	{"love_PseudoInstanceID", OpenGL::ATTRIB_PSEUDO_INSTANCE_ID},
 };
 
@@ -823,6 +879,10 @@ StringMap<OpenGL::VertexAttrib, OpenGL::ATTRIB_MAX_ENUM> Shader::attribNames(Sha
 
 StringMap<Shader::BuiltinUniform, Shader::BUILTIN_MAX_ENUM>::Entry Shader::builtinNameEntries[] =
 {
+	{"TransformMatrix", Shader::BUILTIN_TRANSFORM_MATRIX},
+	{"ProjectionMatrix", Shader::BUILTIN_PROJECTION_MATRIX},
+	{"TransformProjectionMatrix", Shader::BUILTIN_TRANSFORM_PROJECTION_MATRIX},
+	{"love_PointSize", Shader::BUILTIN_POINT_SIZE},
 	{"love_ScreenSize", Shader::BUILTIN_SCREEN_SIZE},
 };
 

@@ -196,6 +196,8 @@ StringMap<Graphics::Support, Graphics::SUPPORT_MAX_ENUM>::Entry Graphics::suppor
 	{ "mipmap", Graphics::SUPPORT_MIPMAP },
 	{ "dxt", Graphics::SUPPORT_DXT },
 	{ "bc5", Graphics::SUPPORT_BC5 },
+	{ "etc1", Graphics::SUPPORT_ETC1 },
+	{ "pvrtc1", Graphics::SUPPORT_PVRTC1 },
 	{ "srgb", Graphics::SUPPORT_SRGB },
 };
 

@@ -64,6 +64,7 @@ ParticleSystem::ParticleSystem(Texture *texture, uint32 size)
 	, pHead(nullptr)
 	, pTail(nullptr)
 	, particleVerts(nullptr)
+	, ibo(nullptr)
 	, texture(texture)
 	, active(true)
 	, insertMode(INSERT_MODE_TOP)
@@ -112,6 +113,7 @@ ParticleSystem::ParticleSystem(const ParticleSystem &p)
 	, pHead(nullptr)
 	, pTail(nullptr)
 	, particleVerts(nullptr)
+	, ibo(nullptr)
 	, texture(p.texture)
 	, active(p.active)
 	, insertMode(p.insertMode)
@@ -171,7 +173,13 @@ void ParticleSystem::createBuffers(size_t size)
 	{
 		pFree = pMem = new Particle[size];
 		particleVerts = new love::Vertex[size * 4];
+		ibo = new VertexIndex(size);
 		maxParticles = (uint32) size;
+	}
+	catch (love::Exception &)
+	{
+		deleteBuffers();
+		throw;
 	}
 	catch (std::bad_alloc &)
 	{
@@ -185,9 +193,12 @@ void ParticleSystem::deleteBuffers()
 	// Clean up for great gracefulness!
 	delete[] pMem;
 	delete[] particleVerts;
+	delete ibo;
 
 	pMem = nullptr;
 	particleVerts = nullptr;
+	ibo = nullptr;
+
 	maxParticles = 0;
 	activeParticles = 0;
 }
@@ -834,7 +845,7 @@ void ParticleSystem::draw(float x, float y, float angle, float sx, float sy, flo
 
 	Color curcolor = gl.getColor();
 
-	static Matrix t;
+	Matrix t;
 	t.setTransformation(x, y, angle, sx, sy, ox, oy, kx, ky);
 
 	OpenGL::TempTransform transform(gl);
@@ -874,21 +885,24 @@ void ParticleSystem::draw(float x, float y, float angle, float sx, float sy, flo
 	}
 
 	texture->predraw();
-
-	glEnableClientState(GL_COLOR_ARRAY);
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(Vertex), (GLvoid *) &particleVerts[0].r);
-	glVertexPointer(2, GL_FLOAT, sizeof(Vertex), (GLvoid *) &particleVerts[0].x);
-	glTexCoordPointer(2, GL_FLOAT, sizeof(Vertex), (GLvoid *) &particleVerts[0].s);
-
 	gl.prepareDraw();
-	gl.drawArrays(GL_QUADS, 0, pCount * 4);
 
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-	glDisableClientState(GL_VERTEX_ARRAY);
-	glDisableClientState(GL_COLOR_ARRAY);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_COLOR);
+
+	gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, sizeof(Vertex), &particleVerts[0].x);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_TEXCOORD, 2, GL_FLOAT, sizeof(Vertex), &particleVerts[0].s);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_COLOR, 4, GL_UNSIGNED_BYTE, sizeof(Vertex), &particleVerts[0].r);
+
+	{
+		VertexBuffer::Bind ibo_bind(*ibo->getVertexBuffer());
+		gl.drawElements(GL_TRIANGLES, ibo->getIndexCount(pCount), ibo->getType(), ibo->getPointer(0));
+	}
+
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_COLOR);
 
 	texture->postdraw();
 

@@ -21,12 +21,15 @@
 #ifndef LOVE_GRAPHICS_OPENGL_OPENGL_H
 #define LOVE_GRAPHICS_OPENGL_OPENGL_H
 
-#include "GLee.h"
+#include <stddef.h>
 
 // LOVE
 #include "graphics/Color.h"
 #include "graphics/Texture.h"
 #include "common/Matrix.h"
+
+// GLAD
+#include "libraries/glad/gladfuncs.hpp"
 
 // C++
 #include <vector>
@@ -41,6 +44,11 @@ namespace graphics
 {
 namespace opengl
 {
+
+// Awful, but the library uses the namespace in order to use the functions sanely
+// with proper autocomplete in IDEs while having name mangling safety -
+// no clashes with other GL libraries when linking, etc.
+using namespace glad;
 
 /**
  * Thin layer between OpenGL and the rest of the program.
@@ -60,19 +68,25 @@ public:
 		VENDOR_NVIDIA,
 		VENDOR_INTEL,
 		VENDOR_MESA_SOFT, // Software renderer.
-		VENDOR_APPLE,     // Software renderer.
+		VENDOR_APPLE,     // Software renderer (or Apple A7 chips and newer.)
 		VENDOR_MICROSOFT, // Software renderer.
+		VENDOR_IMGTEC,
+		VENDOR_ARM,
+		VENDOR_QUALCOMM,
+		VENDOR_BROADCOM,
+		VENDOR_VIVANTE,
 		VENDOR_UNKNOWN
 	};
 
 	// Vertex attributes used in shaders by LOVE. The values map to OpenGL
 	// generic vertex attribute indices, when applicable.
-	// LOVE uses the old hard-coded attribute APIs for positions, colors, etc.
-	// (for now.)
+	// LOVE uses the old hard-coded attribute APIs on desktop GL (for now.)
 	enum VertexAttrib
 	{
-		// Instance ID when pseudo-instancing is used.
-		ATTRIB_PSEUDO_INSTANCE_ID = 1,
+		ATTRIB_POS      = 0,
+		ATTRIB_TEXCOORD = 1,
+		ATTRIB_COLOR    = 2,
+		ATTRIB_PSEUDO_INSTANCE_ID = 3, // Shader pseudo-instance ID.
 		ATTRIB_MAX_ENUM
 	};
 
@@ -140,12 +154,13 @@ public:
 	} stats;
 
 	OpenGL();
+	virtual ~OpenGL() {}
 
 	/**
 	 * Initializes some required context state based on current and default
 	 * OpenGL state. Call this directly after creating an OpenGL context!
 	 **/
-	void initContext();
+	bool initContext();
 
 	/**
 	 * Marks current context state as invalid and deletes OpenGL objects owned
@@ -159,17 +174,17 @@ public:
 	Matrix &getTransform();
 
 	/**
-	 * Set up necessary state (LOVE-provided shader uniforms, etc.) for drawing.
-	 * This *MUST* be called directly before OpenGL drawing functions.
+	 * Set up necessary state (matrices etc.) for drawing. This *must* be called
+	 * directly before GL draws.
 	 **/
 	void prepareDraw();
 
 	/**
-	 * glDrawArrays and glDrawElements which increment the draw-call counter by
-	 * themselves.
+	 * glDraw* functions which increment the draw-call counter by themselves.
 	 **/
 	void drawArrays(GLenum mode, GLint first, GLsizei count);
 	void drawElements(GLenum mode, GLsizei count, GLenum type, const void *indices);
+	void drawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices, GLint basevertex);
 
 	/**
 	 * Sets the current constant color.
@@ -190,6 +205,24 @@ public:
 	 * Gets the current clear color.
 	 **/
 	Color getClearColor() const;
+
+	/**
+	 * Enables usage of an array for a vertex attribute when drawing.
+	 * See http://www.opengl.org/sdk/docs/man/xhtml/glEnableVertexAttribArray.xml
+	 **/
+	void enableVertexAttribArray(VertexAttrib attrib);
+
+	/**
+	 * Disables usage of an array for a vertex attribute when drawing.
+	 * See http://www.opengl.org/sdk/docs/man/xhtml/glDisableVertexAttribArray.xml
+	 **/
+	void disableVertexAttribArray(VertexAttrib attrib);
+
+	/**
+	 * Sets the parameters for an array of data for a vertex attribute.
+	 * See http://www.opengl.org/sdk/docs/man/xhtml/glVertexAttribPointer.xml
+	 **/
+	void setVertexAttribArray(VertexAttrib attrib, GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
 
 	/**
 	 * Sets the OpenGL rendering viewport to the specified rectangle.
@@ -223,6 +256,27 @@ public:
 	 * Gets the currently set blending functionality.
 	 **/
 	BlendState getBlendState() const;
+
+	/**
+	 * Sets the global point size.
+	 **/
+	void setPointSize(float size);
+
+	/**
+	 * Gets the global point size.
+	 **/
+	float getPointSize() const;
+
+	/**
+	 * This will usually be 0 (system drawable), but some platforms require a
+	 * non-zero FBO for rendering.
+	 **/
+	GLuint getDefaultFBO() const;
+
+	/**
+	 * Gets the ID for love's default texture (used for "untextured" draws.)
+	 **/
+	GLuint getDefaultTexture() const;
 
 	/**
 	 * Helper for setting the active texture unit.
@@ -292,6 +346,8 @@ private:
 	void initMatrices();
 	void createDefaultTexture();
 
+	GLint getGLAttrib(VertexAttrib attrib);
+
 	bool contextInitialized;
 
 	float maxAnisotropy;
@@ -316,6 +372,12 @@ private:
 
 		Viewport viewport;
 		Viewport scissor;
+
+		float pointSize;
+
+		GLuint defaultTexture;
+
+		GLuint defaultFBO;
 
 		BlendState blend;
 

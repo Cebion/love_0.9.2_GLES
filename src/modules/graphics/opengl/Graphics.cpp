@@ -49,6 +49,7 @@ Graphics::Graphics()
 	: width(0)
 	, height(0)
 	, created(false)
+	, active(true)
 	, activeStencil(false)
 {
 	gl = OpenGL();
@@ -72,6 +73,12 @@ Graphics::~Graphics()
 	// We do this manually so the love objects get released before the window.
 	states.clear();
 	defaultFont.set(nullptr);
+
+	if (Shader::defaultShader)
+	{
+		Shader::defaultShader->release();
+		Shader::defaultShader = nullptr;
+	}
 
 	currentWindow->release();
 }
@@ -221,40 +228,57 @@ bool Graphics::setMode(int width, int height, bool &sRGB)
 	this->height = height;
 
 	// Okay, setup OpenGL.
-	gl.initContext();
+	if (!gl.initContext())
+	{
+		created = false;
+		return false;
+	}
+
+	// Minimum required OpenGL version.
+	if (!(GLAD_ES_VERSION_2_0 || GLAD_VERSION_1_3))
+	{
+		created = false;
+		return false;
+	}
 
 	created = true;
 
 	setViewportSize(width, height);
 
 	// Make sure antialiasing works when set elsewhere
-	if (GLEE_VERSION_1_3 || GLEE_ARB_multisample)
+	if (GLAD_VERSION_1_3)
 		glEnable(GL_MULTISAMPLE);
 
 	// Enable blending
 	glEnable(GL_BLEND);
 
-	// Make sure smooth points look OK.
-	glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
+	if (GLAD_VERSION_1_0)
+		glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
 
 	// Auto-generated mipmaps should be the best quality possible
-	if (GLEE_VERSION_1_4 || GLEE_SGIS_generate_mipmap)
+	if (GLAD_ES_VERSION_2_0 || GLAD_VERSION_1_4 || GLAD_SGIS_generate_mipmap)
 		glHint(GL_GENERATE_MIPMAP_HINT, GL_NICEST);
 
-	// Enable textures
-	glEnable(GL_TEXTURE_2D);
+	// Enable textures (necessary on desktop GL)
+	if (GLAD_VERSION_1_1)
+		glEnable(GL_TEXTURE_2D);
+
 	gl.setTextureUnit(0);
 
 	// Set pixel row alignment
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
 	// Set whether drawing converts input from linear -> sRGB colorspace.
-	if (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_sRGB || GLEE_EXT_framebuffer_sRGB)
+	if (GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_sRGB || GLAD_EXT_framebuffer_sRGB
+		|| (GLAD_ES_VERSION_3_0 || GLAD_EXT_sRGB))
 	{
-		if (sRGB)
-			glEnable(GL_FRAMEBUFFER_SRGB);
-		else
-			glDisable(GL_FRAMEBUFFER_SRGB);
+		if (GLAD_VERSION_1_1 || GLAD_EXT_sRGB_write_control)
+		{
+			if (sRGB)
+				glEnable(GL_FRAMEBUFFER_SRGB);
+			else
+				glDisable(GL_FRAMEBUFFER_SRGB);
+		}
 	}
 	else
 		sRGB = false;
@@ -263,7 +287,7 @@ bool Graphics::setMode(int width, int height, bool &sRGB)
 
 	bool enabledebug = false;
 
-	if (GLEE_VERSION_3_0)
+	if (GLAD_VERSION_3_0)
 	{
 		// Enable OpenGL's debug output if a debug context has been created.
 		GLint flags = 0;
@@ -271,7 +295,10 @@ bool Graphics::setMode(int width, int height, bool &sRGB)
 		enabledebug = (flags & GL_CONTEXT_FLAG_DEBUG_BIT) != 0;
 	}
 
-	setDebug(enabledebug);
+	// FIXME: workaround for KHR_debug being supported but function pointers
+	// resolving to null on Ouya.
+	if (!GLAD_ES_VERSION_2_0)
+		setDebug(enabledebug);
 
 	// Reload all volatile objects.
 	if (!Volatile::loadAll())
@@ -283,6 +310,16 @@ bool Graphics::setMode(int width, int height, bool &sRGB)
 	pixel_size_stack.clear();
 	pixel_size_stack.reserve(5);
 	pixel_size_stack.push_back(1);
+
+	// We always need a default shader in OpenGL ES 2.
+	if (GLAD_ES_VERSION_2_0)
+	{
+		if (!Shader::defaultShader)
+			Shader::defaultShader = newShader(Shader::defaultCode[RENDERER_OPENGLES]);
+
+		if (!getShader())
+			setShader(Shader::defaultShader);
+	}
 
 	return true;
 }
@@ -301,7 +338,24 @@ void Graphics::unSetMode()
 	created = false;
 }
 
-static void APIENTRY debugCB(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei /*len*/, const GLchar *msg, GLvoid* /*usr*/)
+void Graphics::setActive(bool active)
+{
+	// Make sure all pending OpenGL commands have fully executed before
+	// returning, if we're going from active to inactive.
+	if (isCreated() && this->active && !active)
+		glFinish();
+
+	this->active = active;
+}
+
+bool Graphics::isActive() const
+{
+	// The graphics module is only completely 'active' if there's a window, a
+	// context, and the active variable is set.
+	return active && isCreated() && currentWindow && currentWindow->isCreated();
+}
+
+static void APIENTRY debugCB(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei /*len*/, const GLchar *msg, const GLvoid* /*usr*/)
 {
 	// Human-readable strings for the debug info.
 	const char *sourceStr = OpenGL::debugSourceString(source);
@@ -316,14 +370,19 @@ void Graphics::setDebug(bool enable)
 {
 	// Make sure debug output is supported. The AMD ext. is a bit different
 	// so we don't make use of it, since AMD drivers now support KHR_debug.
-	if (!(GLEE_VERSION_4_3 || GLEE_KHR_debug || GLEE_ARB_debug_output))
+	if (!(GLAD_VERSION_4_3 || GLAD_KHR_debug || GLAD_ARB_debug_output))
 		return;
 
 	// Ugly hack to reduce code duplication.
-	if (GLEE_ARB_debug_output && !(GLEE_VERSION_4_3 || GLEE_KHR_debug))
+	if (GLAD_ARB_debug_output && !(GLAD_VERSION_4_3 || GLAD_KHR_debug))
 	{
-		glDebugMessageCallback = (GLEEPFNGLDEBUGMESSAGECALLBACKPROC) glDebugMessageCallbackARB;
-		glDebugMessageControl = (GLEEPFNGLDEBUGMESSAGECONTROLPROC) glDebugMessageControlARB;
+		fp_glDebugMessageCallback = (pfn_glDebugMessageCallback) fp_glDebugMessageCallbackARB;
+		fp_glDebugMessageControl = (pfn_glDebugMessageControl) fp_glDebugMessageControlARB;
+	}
+	else if (GLAD_ES_VERSION_2_0 && GLAD_KHR_debug)
+	{
+		fp_glDebugMessageCallback = (pfn_glDebugMessageCallback) fp_glDebugMessageCallbackKHR;
+		fp_glDebugMessageControl = (pfn_glDebugMessageControl) fp_glDebugMessageControlKHR;
 	}
 
 	if (!enable)
@@ -332,7 +391,7 @@ void Graphics::setDebug(bool enable)
 		glDebugMessageCallback(nullptr, nullptr);
 
 		// We can disable debug output entirely with KHR_debug.
-		if (GLEE_VERSION_4_3 || GLEE_KHR_debug)
+		if (GLAD_VERSION_4_3 || GLAD_KHR_debug)
 			glDisable(GL_DEBUG_OUTPUT);
 
 		return;
@@ -350,7 +409,7 @@ void Graphics::setDebug(bool enable)
 	glDebugMessageControl(GL_DEBUG_SOURCE_API, GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR, GL_DONT_CARE, 0, 0, GL_FALSE);
 	glDebugMessageControl(GL_DEBUG_SOURCE_SHADER_COMPILER, GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR, GL_DONT_CARE, 0, 0, GL_FALSE);
 
-	if (GLEE_VERSION_4_3 || GLEE_KHR_debug)
+	if (GLAD_VERSION_4_3 || GLAD_KHR_debug)
 		glEnable(GL_DEBUG_OUTPUT);
 
 	::printf("OpenGL debug output enabled (LOVE_GRAPHICS_DEBUG=1)\n");
@@ -366,12 +425,42 @@ void Graphics::reset()
 
 void Graphics::clear()
 {
-	glClear(GL_COLOR_BUFFER_BIT);
+	GLbitfield buffers = GL_COLOR_BUFFER_BIT;
+
+	if (GLAD_EXT_discard_framebuffer)
+		buffers |= GL_STENCIL_BUFFER_BIT | GL_DEPTH_BUFFER_BIT;
+
+	glClear(buffers);
 }
 
 void Graphics::present()
 {
+	if (!isActive())
+		return;
+
+	// Make sure we don't have a canvas active.
+	std::vector<StrongRef<Canvas>> canvases = states.back().canvases;
+	setCanvas();
+
+	if (GLAD_EXT_discard_framebuffer)
+	{
+		GLenum attachments[] = {GL_STENCIL_EXT, GL_DEPTH_EXT};
+
+		if (gl.getDefaultFBO() != 0)
+		{
+			// A non-zero FBO needs different attachment enums.
+			attachments[0] = GL_STENCIL_ATTACHMENT;
+			attachments[1] = GL_DEPTH_ATTACHMENT;
+		}
+
+		// Hint for the driver that it doesn't need to save these buffers.
+		glDiscardFramebufferEXT(GL_FRAMEBUFFER, 2, attachments);
+	}
+
 	currentWindow->swapBuffers();
+
+	// Restore the currently active canvas, if there is one.
+	setCanvas(canvases);
 
 	// Reset the per-frame stat counts.
 	gl.stats.drawCalls = 0;
@@ -755,7 +844,7 @@ void Graphics::setBlendMode(Graphics::BlendMode mode)
 	switch (mode)
 	{
 	case BLEND_ALPHA:
-		if (GLEE_VERSION_1_4 || GLEE_EXT_blend_func_separate)
+		if (GLAD_ES_VERSION_2_0 || GLAD_VERSION_1_4 || GLAD_EXT_blend_func_separate)
 		{
 			blend.srcRGB = GL_SRC_ALPHA;
 			blend.srcA = GL_ONE;
@@ -863,12 +952,15 @@ Graphics::LineJoin Graphics::getLineJoin() const
 
 void Graphics::setPointSize(float size)
 {
-	glPointSize(size);
+	gl.setPointSize(size);
 	states.back().pointSize = size;
 }
 
 void Graphics::setPointStyle(Graphics::PointStyle style)
 {
+	if (GLAD_ES_VERSION_2_0)
+		return;
+
 	if (style == POINT_SMOOTH)
 		glEnable(GL_POINT_SMOOTH);
 	else // love::POINT_ROUGH
@@ -889,7 +981,10 @@ Graphics::PointStyle Graphics::getPointStyle() const
 
 void Graphics::setWireframe(bool enable)
 {
-	glPolygonMode(GL_FRONT_AND_BACK, enable ? GL_LINE : GL_FILL);
+	// Not supported in OpenGL ES.
+	if (!GLAD_ES_VERSION_2_0)
+		glPolygonMode(GL_FRONT_AND_BACK, enable ? GL_LINE : GL_FILL);
+
 	states.back().wireframe = enable;
 }
 
@@ -928,7 +1023,7 @@ void Graphics::printf(const std::string &str, float x, float y, float wrap, Alig
 	vector<bool> wrappedlines;
 	vector<string> lines_to_draw = state.font->getWrap(str, wrap, 0, &wrappedlines);
 
-	static Matrix t;
+	Matrix t;
 	t.setTransformation(ceilf(x), ceilf(y), angle, sx, sy, ox, oy, kx, ky);
 
 	OpenGL::TempTransform transform(gl);
@@ -978,12 +1073,17 @@ void Graphics::printf(const std::string &str, float x, float y, float wrap, Alig
 void Graphics::point(float x, float y)
 {
 	gl.prepareDraw();
-	gl.bindTexture(0);
-	glBegin(GL_POINTS);
-	glVertex2f(x, y);
-	glEnd();
 
-	++gl.stats.drawCalls;
+	gl.bindTexture(gl.getDefaultTexture());
+
+	GLfloat coord[] = {x, y};
+
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, 0, coord);
+
+	gl.drawArrays(GL_POINTS, 0, 1);
+
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
 }
 
 void Graphics::polyline(const float *coords, size_t count)
@@ -1023,7 +1123,24 @@ void Graphics::circle(DrawMode mode, float x, float y, float radius, int points)
 	float angle_shift = (two_pi / points);
 	float phi = .0f;
 
-	float *coords = new float[2 * (points + 1)];
+	float *coords = nullptr;
+	int extrapoints = 1;
+
+	// Fill mode will use a triangle fan internally, so we want the "hub" of the
+	// fan (its first vertex) to be the midpoint of the circle.
+	if (mode == DRAW_FILL)
+	{
+		extrapoints = 2;
+		coords = new float[2 * (points + extrapoints)];
+
+		coords[0] = x;
+		coords[1] = y;
+
+		coords += 2;
+	}
+	else
+		coords = new float[2 * (points + extrapoints)];
+
 	for (int i = 0; i < points; ++i, phi += angle_shift)
 	{
 		coords[2*i]   = x + radius * cosf(phi);
@@ -1033,7 +1150,10 @@ void Graphics::circle(DrawMode mode, float x, float y, float radius, int points)
 	coords[2*points]   = coords[0];
 	coords[2*points+1] = coords[1];
 
-	polygon(mode, coords, (points + 1) * 2);
+	if (mode == DRAW_FILL)
+		coords -= 2;
+
+	polygon(mode, coords, 2 * (points + extrapoints));
 
 	delete[] coords;
 }
@@ -1076,11 +1196,15 @@ void Graphics::arc(DrawMode mode, float x, float y, float radius, float angle1, 
 	else
 	{
 		gl.prepareDraw();
-		gl.bindTexture(0);
-		glEnableClientState(GL_VERTEX_ARRAY);
-		glVertexPointer(2, GL_FLOAT, 0, (const GLvoid *) coords);
+
+		gl.bindTexture(gl.getDefaultTexture());
+
+		gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+		gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, 0, (GLvoid *) coords);
+
 		gl.drawArrays(GL_TRIANGLE_FAN, 0, points + 2);
-		glDisableClientState(GL_VERTEX_ARRAY);
+
+		gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
 	}
 
 	delete[] coords;
@@ -1100,11 +1224,15 @@ void Graphics::polygon(DrawMode mode, const float *coords, size_t count)
 	else
 	{
 		gl.prepareDraw();
-		gl.bindTexture(0);
-		glEnableClientState(GL_VERTEX_ARRAY);
-		glVertexPointer(2, GL_FLOAT, 0, (const GLvoid *)coords);
-		gl.drawArrays(GL_POLYGON, 0, count/2-1); // opengl will close the polygon for us
-		glDisableClientState(GL_VERTEX_ARRAY);
+
+		gl.bindTexture(gl.getDefaultTexture());
+
+		gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+		gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, 0, (GLvoid *) coords);
+
+		gl.drawArrays(GL_TRIANGLE_FAN, 0, count / 2);
+
+		gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
 	}
 }
 
@@ -1179,7 +1307,11 @@ love::image::ImageData *Graphics::newScreenshot(love::image::Image *image, bool 
 Graphics::RendererInfo Graphics::getRendererInfo() const
 {
 	RendererInfo info;
-	info.name = "OpenGL";
+
+	if (GLAD_ES_VERSION_2_0)
+		info.name = "OpenGL ES";
+	else
+		info.name = "OpenGL";
 
 	const char *str = (const char *) glGetString(GL_VERSION);
 	if (str)
@@ -1237,8 +1369,8 @@ double Graphics::getSystemLimit(SystemLimit limittype) const
 		break;
 	case Graphics::LIMIT_CANVAS_FSAA: // For backward-compatibility.
 	case Graphics::LIMIT_CANVAS_MSAA:
-		if (GLEE_VERSION_3_0 || GLEE_ARB_framebuffer_object
-			|| GLEE_EXT_framebuffer_multisample)
+		if (GLAD_VERSION_3_0 || GLAD_ARB_framebuffer_object
+			|| GLAD_EXT_framebuffer_multisample)
 		{
 			GLint intlimit = 0;
 			glGetIntegerv(GL_MAX_SAMPLES, &intlimit);
@@ -1267,13 +1399,17 @@ bool Graphics::isSupported(Support feature) const
 	case SUPPORT_NPOT:
 		return Image::hasNpot();
 	case SUPPORT_SUBTRACTIVE:
-		return (GLEE_VERSION_1_4 || GLEE_ARB_imaging) || (GLEE_EXT_blend_minmax && GLEE_EXT_blend_subtract);
+		return (GLAD_ES_VERSION_2_0 || GLAD_VERSION_1_4) || (GLAD_EXT_blend_minmax && GLAD_EXT_blend_subtract);
 	case SUPPORT_MIPMAP:
 		return Image::hasMipmapSupport();
 	case SUPPORT_DXT:
 		return Image::hasCompressedTextureSupport(image::CompressedData::FORMAT_DXT5);
 	case SUPPORT_BC5:
 		return Image::hasCompressedTextureSupport(image::CompressedData::FORMAT_BC5);
+	case SUPPORT_ETC1:
+		return Image::hasCompressedTextureSupport(image::CompressedData::FORMAT_ETC1);
+	case SUPPORT_PVRTC1:
+		return Image::hasCompressedTextureSupport(image::CompressedData::FORMAT_PVR1_RGBA4);
 	case SUPPORT_SRGB:
 		// sRGB support for the screen is guaranteed if it's supported as a
 		// Canvas format.

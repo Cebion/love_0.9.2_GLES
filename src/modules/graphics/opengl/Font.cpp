@@ -44,6 +44,7 @@ const int Font::TEXTURE_HEIGHTS[] = {128, 128, 256, 256, 512, 512,  1024};
 
 Font::Font(love::font::Rasterizer *r, const Texture::Filter &filter)
 	: rasterizer(r)
+	, indexBuffer(nullptr)
 	, height(r->getHeight())
 	, lineHeight(1)
 	, mSpacing(1)
@@ -71,6 +72,8 @@ Font::Font(love::font::Rasterizer *r, const Texture::Filter &filter)
 	textureWidth = TEXTURE_WIDTHS[textureSizeIndex];
 	textureHeight = TEXTURE_HEIGHTS[textureSizeIndex];
 
+	indexBuffer = new VertexIndex(20);
+
 	love::font::GlyphData *gd = nullptr;
 
 	try
@@ -96,6 +99,7 @@ Font::Font(love::font::Rasterizer *r, const Texture::Filter &filter)
 
 Font::~Font()
 {
+	delete indexBuffer;
 	unloadVolatile();
 
 	--fontCount;
@@ -103,7 +107,7 @@ Font::~Font()
 
 bool Font::initializeTexture(GLenum format)
 {
-	GLint internalformat = (format == GL_LUMINANCE_ALPHA) ? GL_LUMINANCE8_ALPHA8 : GL_RGBA8;
+	GLint internalformat = (format == GL_LUMINANCE_ALPHA) ? GL_LUMINANCE_ALPHA : GL_RGBA;
 
 	// clear errors before initializing
 	while (glGetError() != GL_NO_ERROR);
@@ -158,7 +162,7 @@ void Font::createTexture()
 	{
 		// Clean up before throwing.
 		gl.deleteTexture(t);
-		gl.bindTexture(0);
+		gl.bindTexture(gl.getDefaultTexture());
 		textures.pop_back();
 
 		throw love::Exception("Could not create font texture!");
@@ -377,31 +381,64 @@ void Font::print(const std::string &text, float x, float y, float extra_spacing,
 	// second (using the struct's < operator).
 	std::sort(glyphinfolist.begin(), glyphinfolist.end());
 
+	int maxvertices = 0;
+	for (auto it = glyphinfolist.begin(); it != glyphinfolist.end(); ++it)
+		maxvertices = std::max(maxvertices, it->vertexcount);
+
+	// If the index buffer is too small for the number of glyphs we're going to
+	// draw, we need to make a new one that has the correct size.
+	if ((size_t) maxvertices / 4 > indexBuffer->getSize())
+	{
+		VertexIndex *newIndexBuffer = new VertexIndex(maxvertices / 4);
+		delete indexBuffer;
+		indexBuffer = newIndexBuffer;
+	}
+
 	Matrix t;
 	t.setTransformation(ceilf(x), ceilf(y), angle, sx, sy, ox, oy, kx, ky);
 
 	OpenGL::TempTransform transform(gl);
 	transform.get() *= t;
 
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-	glVertexPointer(2, GL_FLOAT, sizeof(GlyphVertex), (GLvoid *)&glyphverts[0].x);
-	glTexCoordPointer(2, GL_FLOAT, sizeof(GlyphVertex), (GLvoid *)&glyphverts[0].s);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.enableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 
 	gl.prepareDraw();
 
-	// We need to draw a new vertex array for every section of the string which
-	// uses a different texture than the previous section.
-	std::vector<GlyphArrayDrawInfo>::const_iterator it;
-	for (it = glyphinfolist.begin(); it != glyphinfolist.end(); ++it)
+	VertexBuffer::Bind index_bind(*indexBuffer->getVertexBuffer());
+	GLenum elemtype = indexBuffer->getType();
+	const GLvoid *elemoffset = indexBuffer->getPointer(0);
+
+	// Optimization: we can take these calls out of the loop if we have support.
+	if (GLAD_VERSION_3_2 || GLAD_ARB_draw_elements_base_vertex)
 	{
-		gl.bindTexture(it->texture);
-		gl.drawArrays(GL_QUADS, it->startvertex, it->vertexcount);
+		gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, sizeof(GlyphVertex), &glyphverts[0].x);
+		gl.setVertexAttribArray(OpenGL::ATTRIB_TEXCOORD, 2, GL_FLOAT, sizeof(GlyphVertex), &glyphverts[0].s);
 	}
 
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-	glDisableClientState(GL_VERTEX_ARRAY);
+	// We need to draw a new vertex array for every section of the string which
+	// uses a different texture than the previous section.
+	for (auto it = glyphinfolist.begin(); it != glyphinfolist.end(); ++it)
+	{
+		gl.bindTexture(it->texture);
+
+		if (GLAD_VERSION_3_2 || GLAD_ARB_draw_elements_base_vertex)
+		{
+			// Optimization: setting a base vertex is faster than redoing the
+			// setVertexAttribArray calls before each draw.
+			gl.drawElementsBaseVertex(GL_TRIANGLES, (it->vertexcount / 4) * 6, elemtype, elemoffset, it->startvertex);
+		}
+		else
+		{
+			gl.setVertexAttribArray(OpenGL::ATTRIB_POS, 2, GL_FLOAT, sizeof(GlyphVertex), &glyphverts[it->startvertex].x);
+			gl.setVertexAttribArray(OpenGL::ATTRIB_TEXCOORD, 2, GL_FLOAT, sizeof(GlyphVertex), &glyphverts[it->startvertex].s);
+
+			gl.drawElements(GL_TRIANGLES, (it->vertexcount / 4) * 6, elemtype, elemoffset);
+		}
+	}
+
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_POS);
+	gl.disableVertexAttribArray(OpenGL::ATTRIB_TEXCOORD);
 }
 
 int Font::getWidth(const std::string &str)

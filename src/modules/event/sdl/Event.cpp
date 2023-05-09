@@ -50,6 +50,34 @@ static void windowToPixelCoords(double *x, double *y)
 		*y = window->toPixels(*y);
 }
 
+// SDL's event watch callbacks trigger when the event is actually posted inside
+// SDL, unlike with SDL_PollEvents. This is useful for some events which require
+// handling inside the function which triggered them on some backends.
+static int SDLCALL watchAppEvents(void * /*udata*/, SDL_Event *event)
+{
+	graphics::Graphics *gfx = Module::getInstance<graphics::Graphics>(Module::M_GRAPHICS);
+
+	switch (event->type)
+	{
+	// On iOS, calling any OpenGL ES function after the function which triggers
+	// SDL_APP_DIDENTERBACKGROUND is called will kill the app, so we handle it
+	// with an event watch callback, which will be called inside that function.
+	case SDL_APP_DIDENTERBACKGROUND:
+	case SDL_APP_WILLENTERFOREGROUND:
+		// On Android, before calling setActive we should probably also call a
+		// window function to un-set the graphics mode and delete the context,
+		// after DIDENTERBACKGROUND (and the reverse after WILLENTERFOREGROUND.)
+		if (gfx)
+			gfx->setActive(event->type == SDL_APP_WILLENTERFOREGROUND);
+		break;
+	default:
+		break;
+	}
+
+	// Don't prevent the event from being processed further.
+	return 1;
+}
+
 
 const char *Event::getName() const
 {
@@ -60,10 +88,13 @@ Event::Event()
 {
 	if (SDL_InitSubSystem(SDL_INIT_EVENTS) < 0)
 		throw love::Exception("%s", SDL_GetError());
+
+	SDL_AddEventWatch(watchAppEvents, this);
 }
 
 Event::~Event()
 {
+	SDL_DelEventWatch(watchAppEvents, this);
 	SDL_QuitSubSystem(SDL_INIT_EVENTS);
 }
 

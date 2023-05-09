@@ -24,6 +24,7 @@
 // LOVE
 #include "common/Object.h"
 #include "common/StringMap.h"
+#include "graphics/Graphics.h"
 #include "OpenGL.h"
 #include "Texture.h"
 
@@ -49,6 +50,9 @@ public:
 	// Pointer to currently active Shader.
 	static Shader *current;
 
+	// Pointer to the current default Shader.
+	static Shader *defaultShader;
+
 	enum ShaderStage
 	{
 		STAGE_VERTEX,
@@ -59,6 +63,10 @@ public:
 	// Built-in uniform (extern) variables.
 	enum BuiltinUniform
 	{
+		BUILTIN_TRANSFORM_MATRIX = 0,
+		BUILTIN_PROJECTION_MATRIX,
+		BUILTIN_TRANSFORM_PROJECTION_MATRIX,
+		BUILTIN_POINT_SIZE,
 		BUILTIN_SCREEN_SIZE,
 		BUILTIN_MAX_ENUM
 	};
@@ -167,6 +175,7 @@ public:
 	 **/
 	bool hasVertexAttrib(OpenGL::VertexAttrib attrib) const;
 	bool hasBuiltinUniform(BuiltinUniform builtin) const;
+	bool sendBuiltinMatrix(BuiltinUniform builtin, int size, const GLfloat *m, int count);
 	bool sendBuiltinFloat(BuiltinUniform builtin, int size, const GLfloat *m, int count);
 	void checkSetScreenParams();
 
@@ -174,6 +183,9 @@ public:
 
 	static std::string getGLSLVersion();
 	static bool isSupported();
+
+	// Default code used when renderers require code for a shader stage.
+	static ShaderSource defaultCode[Graphics::RENDERER_MAX_ENUM];
 
 	static bool getConstant(const char *in, UniformType &out);
 	static bool getConstant(UniformType in, const char *&out);
@@ -256,7 +268,8 @@ private:
 	// Names for the built-in uniform variables.
 	static StringMap<BuiltinUniform, BUILTIN_MAX_ENUM>::Entry builtinNameEntries[];
 	static StringMap<BuiltinUniform, BUILTIN_MAX_ENUM> builtinNames;
-};
+
+}; // Shader
 
 } // opengl
 } // graphics

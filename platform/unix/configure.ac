@@ -63,7 +63,7 @@ PKG_CHECK_MODULES([vorbisfile], [vorbisfile], [], [LOVE_MSG_ERROR([libvorbis and
 # Other libraries
 AC_SEARCH_LIBS([sqrt], [m], [], [LOVE_MSG_ERROR([the C math library])])
 AC_SEARCH_LIBS([PHYSFS_init], [physfs], [], [LOVE_MSG_ERROR([PhysicsFS])])
-AC_SEARCH_LIBS([glLoadIdentity], [GL], [], [LOVE_MSG_ERROR([OpenGL])])
+AC_SEARCH_LIBS([glViewport], [GLESv2], [], [LOVE_MSG_ERROR([OpenGL])])
 
 # Lua, treated seperately because of --with-lua
 AS_VAR_IF([with_luaversion], [5.2], [luatest=lua_version], [luatest=lua_pcall]) # use lua_version for 5.2

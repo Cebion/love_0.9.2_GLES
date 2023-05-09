@@ -116,12 +116,14 @@ const void *VertexArray::getPointer(size_t offset) const
 // VBO
 
 VBO::VBO(size_t size, GLenum target, GLenum usage, MemoryBacking backing)
-	: VertexBuffer(size, target, usage, backing)
+	// FIXME:
+	// ES2 can't do glGetBufferSubData.
+	: VertexBuffer(size, target, usage, GLAD_ES_VERSION_2_0 ? BACKING_FULL : backing)
 	, vbo(0)
 	, memory_map(nullptr)
 	, is_dirty(false)
 {
-	if (!(GLEE_ARB_vertex_buffer_object || GLEE_VERSION_1_5))
+	if (!(GLAD_ARB_vertex_buffer_object || GLAD_VERSION_1_5 || GLAD_ES_VERSION_2_0))
 		throw love::Exception("Not supported");
 
 	if (getMemoryBacking() == BACKING_FULL)
@@ -159,7 +161,7 @@ void *VBO::map()
 
 	if (is_dirty)
 	{
-		glGetBufferSubDataARB(getTarget(), 0, (GLsizeiptr) getSize(), memory_map);
+		glGetBufferSubData(getTarget(), 0, (GLsizeiptr) getSize(), memory_map);
 		is_dirty = false;
 	}
 
@@ -171,15 +173,15 @@ void *VBO::map()
 void VBO::unmapStatic(size_t offset, size_t size)
 {
 	// Upload the mapped data to the buffer.
-	glBufferSubDataARB(getTarget(), (GLintptr) offset, (GLsizeiptr) size, memory_map + offset);
+	glBufferSubData(getTarget(), (GLintptr) offset, (GLsizeiptr) size, memory_map + offset);
 }
 
 void VBO::unmapStream()
 {
 	// "orphan" current buffer to avoid implicit synchronisation on the GPU:
 	// http://www.seas.upenn.edu/~pcozzi/OpenGLInsights/OpenGLInsights-AsynchronousBufferTransfers.pdf
-	glBufferDataARB(getTarget(), (GLsizeiptr) getSize(), nullptr,    getUsage());
-	glBufferDataARB(getTarget(), (GLsizeiptr) getSize(), memory_map, getUsage());
+	glBufferData(getTarget(), (GLsizeiptr) getSize(), nullptr,    getUsage());
+	glBufferData(getTarget(), (GLsizeiptr) getSize(), memory_map, getUsage());
 }
 
 void VBO::unmap(size_t usedOffset, size_t usedSize)
@@ -194,7 +196,7 @@ void VBO::unmap(size_t usedOffset, size_t usedSize)
 	// bound here.
 	if (!is_bound)
 	{
-		glBindBufferARB(getTarget(), vbo);
+		glBindBuffer(getTarget(), vbo);
 		is_bound = true;
 	}
 
@@ -224,7 +226,7 @@ void VBO::bind()
 {
 	if (!is_mapped)
 	{
-		glBindBufferARB(getTarget(), vbo);
+		glBindBuffer(getTarget(), vbo);
 		is_bound = true;
 	}
 }
@@ -232,7 +234,7 @@ void VBO::bind()
 void VBO::unbind()
 {
 	if (is_bound)
-		glBindBufferARB(getTarget(), 0);
+		glBindBuffer(getTarget(), 0);
 
 	is_bound = false;
 }
@@ -244,7 +246,7 @@ void VBO::fill(size_t offset, size_t size, const void *data)
 
 	if (!is_mapped)
 	{
-		glBufferSubDataARB(getTarget(), (GLintptr) offset, (GLsizeiptr) size, data);
+		glBufferSubData(getTarget(), (GLintptr) offset, (GLsizeiptr) size, data);
 
 		if (getMemoryBacking() != BACKING_FULL)
 			is_dirty = true;
@@ -268,7 +270,7 @@ void VBO::unloadVolatile()
 
 bool VBO::load(bool restore)
 {
-	glGenBuffersARB(1, &vbo);
+	glGenBuffers(1, &vbo);
 
 	VertexBuffer::Bind bind(*this);
 
@@ -279,7 +281,7 @@ bool VBO::load(bool restore)
 		/* clear error messages */;
 
 	// Note that if 'src' is '0', no data will be copied.
-	glBufferDataARB(getTarget(), (GLsizeiptr) getSize(), src, getUsage());
+	glBufferData(getTarget(), (GLsizeiptr) getSize(), src, getUsage());
 	GLenum err = glGetError();
 
 	return (GL_NO_ERROR == err);
@@ -296,7 +298,7 @@ void VBO::unload(bool save)
 
 	is_mapped = false;
 
-	glDeleteBuffersARB(1, &vbo);
+	glDeleteBuffers(1, &vbo);
 	vbo = 0;
 }
 

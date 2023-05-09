@@ -72,6 +72,9 @@ public:
 	virtual bool setMode(int width, int height, bool &sRGB);
 	virtual void unSetMode();
 
+	virtual void setActive(bool active);
+	virtual bool isActive() const;
+
 	void setDebug(bool enable);
 
 	/**
@@ -486,6 +489,7 @@ private:
 	int width;
 	int height;
 	bool created;
+	bool active;
 
 	bool activeStencil;
 
