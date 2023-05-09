@@ -17,7 +17,7 @@ Run `platform/unix/automagic` from the repository root, then run ./configure and
 
 	$ platform/unix/automagic
 	$ ./configure
-	$ make
+	$ make CFLAGS="-Wno-format-overflow"
 
 ###Mac OS X
 Download the required frameworks from [here][dependencies] and place them in `/Library/Frameworks/`.
